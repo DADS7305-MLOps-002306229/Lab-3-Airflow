@@ -255,18 +255,51 @@ Tests use small fixtures, mocked requests, temporary filesystem directories, Air
 
 ## GitHub Actions CI explanation
 
-A single workflow, `.github/workflows/ci.yml`, runs on pushes to `main`, all pull requests, and manual runs through the Actions tab. It contains three independent jobs running in parallel, followed by one combined result:
+A single workflow, `.github/workflows/ci.yml`, runs on pushes to `main`, all pull requests, and manual runs through the Actions tab. It contains four independent jobs running in parallel, followed by one combined result and an optional tagged release:
 
 | Job | Checks |
 |---|---|
 | Python lint and formatting | Ruff rules and formatting, without installing Airflow |
 | Tests and DAG parsing | Python 3.11, constrained Airflow install, dependency compatibility, mocked Pytest tests, DAG parsing and Streamlit checks |
 | Compose validation and Docker build | Validate Compose, build the image shared by both services, verify imports and the dashboard configuration |
+| Build Python package | Build a wheel and source archive, validate metadata, verify isolated wheel installation, and save artifacts |
 | CI result | Write a status table to the run summary and fail unless every required job succeeds |
 
-Pip and Docker layer caches speed up repeat runs. New commits cancel outdated checks for the same branch/PR. Jobs have timeouts and read-only repository permissions. Pytest XML reports are retained as downloadable artifacts for seven days, including when tests fail. Actions use explicit release tags. No NASA API key or `.env` is needed in CI, and nothing is published or deployed.
+Pip and Docker layer caches speed up repeat runs. New commits cancel outdated checks for the same branch/PR. Jobs have timeouts and read-only repository permissions. Pytest XML reports are retained as downloadable artifacts for seven days, including when tests fail. Actions use explicit release tags. No NASA API key or `.env` is needed in CI. Ordinary branch/PR runs do not publish anything; version-tag pushes publish GitHub releases after all checks pass. Docker images are never published.
 
 For branch protection, select **CI result** as the required status check; remove references to the old workflow job names if previously configured.
+
+### Building packages and publishing a release
+
+Every CI run saves a `python-package` artifact containing a wheel (`.whl`) and
+source distribution (`.tar.gz`), retained for 14 days. The wheel installs the
+`asteroid_monitor` Python library and its declared dependencies. Use the GitHub
+repository source archive for the full Docker/DAG/dashboard lab.
+
+To build locally using Python 3.11:
+
+```bash
+python -m pip install build==1.3.0 twine==6.2.0
+python -m build
+python -m twine check --strict dist/*
+```
+
+To publish a GitHub release, first update `version` in `pyproject.toml`, commit the
+change, and push your tested commit. Then push a matching tag (current version:
+`1.0.0`):
+
+```bash
+git tag -a v1.0.0 -m "Release v1.0.0"
+git push origin v1.0.0
+```
+
+The tag push runs the full CI pipeline. The package job rejects tags that do not
+exactly match `v<project version>`. Once every check succeeds, the release job uses
+GitHub's built-in token to create a release with generated notes and both package
+files attached. Only that job receives `contents: write`. No PyPI account or token
+is required. Existing release names are not overwritten; rerunning an already
+published release job fails visibly. Manual workflow runs build artifacts but do
+not publish releases.
 
 ## Example output
 
