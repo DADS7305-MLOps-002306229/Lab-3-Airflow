@@ -1,0 +1,39 @@
+x-project: &project
+  build: .
+  image: asteroid-monitor-airflow:local
+  user: "${AIRFLOW_UID:-50000}:0"
+  environment: &environment
+    ASTEROID_ROOT: /opt/project
+    NASA_API_KEY: ${NASA_API_KEY:-DEMO_KEY}
+  volumes:
+    - ./data:/opt/project/data
+    - ./reports:/opt/project/reports
+
+services:
+  airflow:
+    <<: *project
+    command: standalone
+    environment:
+      <<: *environment
+      AIRFLOW_HOME: /opt/airflow
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/project/dags
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__PARALLELISM: "2"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: admin:admin
+      AIRFLOW__API__BASE_URL: http://localhost:8080
+      AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://localhost:8080/execution/
+    volumes:
+      - ./data:/opt/project/data
+      - ./reports:/opt/project/reports
+      - airflow-home:/opt/airflow
+    ports:
+      - "127.0.0.1:8080:8080"
+  streamlit:
+    <<: *project
+    command: ["bash", "-c", "exec streamlit run app/streamlit_app.py --server.address=0.0.0.0 --server.port=8501"]
+    ports:
+      - "127.0.0.1:8501:8501"
+volumes:
+  airflow-home:
