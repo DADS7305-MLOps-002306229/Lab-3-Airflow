@@ -255,7 +255,18 @@ Tests use small fixtures, mocked requests, temporary filesystem directories, Air
 
 ## GitHub Actions CI explanation
 
-`ci.yml` runs on pushes and PRs to `main`: Python 3.11 setup, Airflow constrained installation, project/testing dependencies, dependency checks, Ruff, and Pytest. `docker-build.yml` runs on pushes to `main` and all PRs: Compose validation and image build. Actions use explicit version tags. Neither workflow publishes images or deploys anything.
+A single workflow, `.github/workflows/ci.yml`, runs on pushes to `main`, all pull requests, and manual runs through the Actions tab. It contains three independent jobs running in parallel, followed by one combined result:
+
+| Job | Checks |
+|---|---|
+| Python lint and formatting | Ruff rules and formatting, without installing Airflow |
+| Tests and DAG parsing | Python 3.11, constrained Airflow install, dependency compatibility, mocked Pytest tests, DAG parsing and Streamlit checks |
+| Compose validation and Docker build | Validate Compose, build the image shared by both services, verify imports and the dashboard configuration |
+| CI result | Write a status table to the run summary and fail unless every required job succeeds |
+
+Pip and Docker layer caches speed up repeat runs. New commits cancel outdated checks for the same branch/PR. Jobs have timeouts and read-only repository permissions. Pytest XML reports are retained as downloadable artifacts for seven days, including when tests fail. Actions use explicit release tags. No NASA API key or `.env` is needed in CI, and nothing is published or deployed.
+
+For branch protection, select **CI result** as the required status check; remove references to the old workflow job names if previously configured.
 
 ## Example output
 
