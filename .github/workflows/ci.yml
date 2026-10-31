@@ -101,7 +101,7 @@ jobs:
         run: |
           docker run --rm --entrypoint bash asteroid-monitor-airflow:ci -euc '
             python -m pip check
-            python -c "import airflow.sdk, asteroid_monitor, streamlit, plotly"
+            python -c "import airflow.sdk, asteroid_monitor, streamlit, plotly, sklearn"
             test -f /opt/project/.streamlit/config.toml
           '
 

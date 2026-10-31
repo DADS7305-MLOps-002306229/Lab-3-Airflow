@@ -114,3 +114,35 @@ st.caption(
     "including historical runs. It does not confirm Airflow run success. "
     "Check task and run status in the Airflow UI."
 )
+
+
+st.subheader("Machine learning lab")
+st.caption("Educational classification of NASA labels. No collision predictions or risk scores.")
+if "evaluation_path" not in manifest:
+    st.info("Run the updated DAG to generate the model and evaluation report.")
+else:
+    try:
+        evaluation = read_json(root / manifest["evaluation_path"])
+        if evaluation["status"] == "skipped":
+            st.info(evaluation["reason"])
+        else:
+            st.write(
+                f"Held-out evaluation: {evaluation['train_records']} training asteroids, "
+                f"{evaluation['test_records']} test asteroids."
+            )
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {"Metric": key.replace("_", " "), "Value": value}
+                        for key, value in evaluation["metrics"].items()
+                    ]
+                ),
+                hide_index=True,
+                width="stretch",
+            )
+            st.caption(
+                "Scores describe this small held-out sample only; "
+                "they do not establish scientific or future predictive validity."
+            )
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        st.warning(f"Model evaluation is unavailable: {exc}. Run the DAG again.")

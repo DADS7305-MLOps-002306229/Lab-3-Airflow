@@ -1,6 +1,6 @@
 # Architecture notes
 
-The DAG contains orchestration only. `api.py` handles bounded HTTP ingestion, `processing.py` validates/normalizes measurements, `analytics.py` calculates descriptive statistics, and `storage.py` manages atomic file writes and output verification. These modules have no Airflow dependency in their business logic.
+The DAG contains orchestration only. `api.py` handles bounded HTTP ingestion, `processing.py` validates/normalizes measurements, `analytics.py` calculates descriptive statistics, `modeling.py` trains and evaluates the educational classifier, and `storage.py` manages atomic file writes and output verification. These modules have no Airflow dependency in their business logic.
 
 ```mermaid
 flowchart TD
@@ -9,7 +9,9 @@ flowchart TD
     VALID --> STAGE[Staging CSV]
     STAGE --> CSV[Processed CSV]
     CSV --> REPORT[Analytical JSON]
-    REPORT --> VERIFY[Compare report with CSV]
+    REPORT --> TRAIN[Train classifier or record insufficient data]
+    TRAIN --> EVAL[Held-out evaluation and baseline]
+    EVAL --> VERIFY[Verify analytics and model evaluation]
     VERIFY --> MANIFEST[Atomic latest manifest]
     MANIFEST --> DASH[Read-only dashboard]
 ```
@@ -31,3 +33,21 @@ Fail on missing required values, non-booleans for hazard flags, invalid numeric 
 ## Runtime
 
 A single Airflow standalone container uses SQLite metadata on a named volume and LocalExecutor with parallelism 2. A second container runs Streamlit using the same installed package/image. Bind mounts expose application artifacts. Both ports bind to loopback. The configuration is intentionally limited to local educational use.
+
+## Educational machine learning
+
+The current day's validated CSV is split deterministically by unique asteroid ID.
+Standardization and logistic regression fit only the training subset. Held-out
+rows are used only for evaluation; no hyperparameter search is performed. At least
+20 total objects and 4 of each class are required. Otherwise both ML tasks write
+explicit skipped reports and the descriptive outputs remain usable.
+
+The model artifact stores numeric parameters as JSON, along with train/test IDs,
+feature order and a dataset fingerprint. Evaluation reconstructs the linear decision
+function on standardized held-out features and compares it to NASA labels and a
+training-majority baseline. Output validation recomputes the evaluation before the
+manifest is published. Historical data are not pooled. The dashboard reads metrics
+only and keeps NASA labels as the authoritative dataset classification.
+
+This exercise approximates a label with incomplete orbital features; it does not
+predict collisions, provide risk scores, or establish real-world predictive validity.

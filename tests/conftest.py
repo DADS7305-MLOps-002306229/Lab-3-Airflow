@@ -31,3 +31,29 @@ def feed():
     other["close_approach_data"][0]["relative_velocity"]["kilometers_per_second"] = "10"
     other["close_approach_data"][0]["miss_distance"]["kilometers"] = "500"
     return {"near_earth_objects": {"2025-01-01": [asteroid, other]}}
+
+
+@pytest.fixture
+def training_feed(feed):
+    """Synthetic separable labels for software tests, never a scientific dataset."""
+    records = []
+    for i in range(80):
+        asteroid = deepcopy(feed["near_earth_objects"]["2025-01-01"][0])
+        hazardous = i % 2 == 0
+        asteroid.update(
+            id=f"test-{i:03}", name=f"Synthetic {i}", is_potentially_hazardous_asteroid=hazardous
+        )
+        low = (1.0 if hazardous else 0.01) + i / 10000
+        asteroid["estimated_diameter"]["kilometers"] = {
+            "estimated_diameter_min": low,
+            "estimated_diameter_max": low * 1.5,
+        }
+        records.append(asteroid)
+    return {"near_earth_objects": {"2025-01-01": records}}
+
+
+@pytest.fixture
+def training_frame(training_feed):
+    from asteroid_monitor.processing import transform_feed
+
+    return transform_feed(training_feed, "2025-01-01")

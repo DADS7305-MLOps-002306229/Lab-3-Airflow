@@ -6,14 +6,14 @@ Public asteroid feeds are nested JSON documents. A repeatable pipeline makes the
 
 ## Project objectives
 
-- Learn six TaskFlow tasks, dependencies, scheduling, retries, and file-based handoffs.
+- Learn eight TaskFlow tasks, dependencies, scheduling, retries, and file-based handoffs.
 - Retrieve one day of NASA data and reject malformed records with useful errors.
 - Build descriptive statistics and explore the results without making duplicate API requests.
 - Practice reproducible containers, mocked tests, linting, and CI.
 
 ## Technology stack
 
-Python **3.11** in Docker/CI; Apache Airflow **3.1.8**; NASA NeoWs; Pandas; Streamlit; Plotly; Docker Compose; Pytest; Ruff; GitHub Actions. The package supports Python 3.11–3.13, matching the selected Airflow release. Python 3.14 is not supported. CSV and JSON hold application data; SQLite holds Airflow metadata. No external database or message broker is needed.
+Python **3.11** in Docker/CI; Apache Airflow **3.1.8**; NASA NeoWs; Pandas; scikit-learn; Streamlit; Plotly; Docker Compose; Pytest; Ruff; GitHub Actions. The package supports Python 3.11–3.13, matching the selected Airflow release. Python 3.14 is not supported. CSV and JSON hold application data; SQLite holds Airflow metadata. No external database or message broker is needed.
 
 ## System architecture
 
@@ -39,7 +39,9 @@ flowchart LR
     V --> T[transform_data]
     T --> S[save_processed_data]
     S --> A[generate_analytics]
-    A --> O[validate_outputs]
+    A --> M[train_model]
+    M --> E[evaluate_model]
+    E --> O[validate_outputs]
 ```
 
 DAG ID: **`nasa_asteroid_monitor`**. Daily schedule, UTC start date 2025-01-01, `catchup=False`, one active run, two retries per task with a one-minute delay, five-minute task timeout, 45-minute run timeout. The DAG initially requires unpausing.
@@ -51,7 +53,9 @@ DAG ID: **`nasa_asteroid_monitor`**. Daily schedule, UTC start date 2025-01-01, 
 | `transform_data` | Validated metadata | Flatten JSON and convert numeric strings | Staging CSV path |
 | `save_processed_data` | Staging path | Read and validate staging CSV; atomically write processed output | Processed CSV path |
 | `generate_analytics` | Processed path | Calculate counts, extrema and means | JSON report path |
-| `validate_outputs` | CSV and report paths | Read files, compare all statistics, log counts | Small result and atomic `reports/latest.json` manifest |
+| `train_model` | Processed CSV path | Split data, fit a scaled logistic classifier or record insufficient data | JSON model path |
+| `evaluate_model` | CSV and model paths | Test saved model on held-out objects; compare a majority baseline | JSON evaluation path |
+| `validate_outputs` | CSV, analytics, model and evaluation paths | Recompute statistics and evaluation; log counts | Small result and atomic `reports/latest.json` manifest |
 
 XCom carries small dictionaries with paths and metadata, never the dataset. TaskFlow function arguments establish the explicit dependencies.
 
@@ -73,7 +77,8 @@ Filenames include the date plus a stable 16-character hash of the run ID. Retrie
 │   ├── api.py
 │   ├── processing.py
 │   ├── analytics.py
-│   └── storage.py
+│   ├── storage.py
+│   └── modeling.py
 ├── app/streamlit_app.py
 ├── tests/                  # API, processing, analytics, storage, DAG, UI
 ├── data/{raw,processed}/
@@ -178,7 +183,7 @@ Do not commit or share that output. This is a development setup using Airflow 3'
 
 ## Triggering the DAG
 
-In the Airflow UI, find `nasa_asteroid_monitor`, unpause it and choose **Trigger DAG**. Inspect the six task logs. Alternatively:
+In the Airflow UI, find `nasa_asteroid_monitor`, unpause it and choose **Trigger DAG**. Inspect the eight task logs. Alternatively:
 
 ```bash
 docker compose exec airflow airflow dags list
@@ -236,6 +241,51 @@ Report keys: `query_date`, `generated_at` (UTC ISO timestamp), `source`, `total_
 
 Four overview metrics; diameter/velocity scatter plot with hover details; ten closest objects bar chart; classification donut chart; name search; hazard filter; velocity/distance sorting; filtered CSV download. Charts include units, legends and text labels. Navy backgrounds and blue/purple accents keep the display readable. The pipeline information area distinguishes query date and generation timestamp from Airflow run status.
 
+## Machine learning creation and evaluation
+
+Two tasks extend the pipeline with a small **scikit-learn logistic regression**
+classifier approximating NASA's existing `is_hazardous` label. Its inputs are
+`diameter_km`, `velocity_km_s`, and `miss_distance_km`. NASA labels remain the
+source of truth in the dashboard and CSV; model outputs do not replace them.
+
+- Require at least **20 unique asteroids**, with at least **4 examples of each class**.
+  An empty, small, or single-class feed produces `status: skipped` and a reason;
+  no model or scores are fabricated. The Airflow tasks still complete normally.
+- Split the current day's objects into 75% training and 25% held-out test data,
+  stratified by label with random seed 42. Reject repeated asteroid IDs.
+- Fit `StandardScaler` and a class-balanced `LogisticRegression` on training rows
+  only. Do not use IDs, names, dates, or labels as features.
+- Save scaler means/scales, coefficients, intercept, train/test IDs, dataset
+  fingerprint, and library version to `reports/<stem>_model.json`. Plain JSON
+  avoids serialized executable objects. Files stay within the existing shared mounts.
+- Evaluate saved parameters on the test objects in `evaluate_model`, without
+  fitting again. Save accuracy, balanced accuracy, precision, recall, F1, a
+  confusion matrix (rows: actual; columns: predicted; order: non-hazardous then
+  potentially hazardous), and majority-class baseline accuracy/balanced accuracy
+  to `reports/<stem>_evaluation.json`.
+- The final validation task checks the dataset fingerprint and recomputes the
+  evaluation before publishing both artifact paths in `reports/latest.json`.
+  Low scores are reported honestly; there is no automatic model promotion.
+
+The dashboard displays evaluation metrics or the insufficient-data explanation.
+Existing manifests without ML paths still load and request an updated DAG run.
+The daily training set does not pool files from older runs, preserving historical
+run reproducibility and avoiding repeated-object leakage across accumulated feeds.
+
+This is an educational supervised-learning exercise, **not a collision predictor**.
+NASA's classification also depends on orbital information absent from these
+features. A tiny random holdout cannot demonstrate scientific validity, future
+performance, or calibrated risk. A high test score does not indicate imminent danger.
+
+The test suite trains and evaluates a separable **synthetic** 80-object fixture,
+checks independent training/test IDs, training-only scaling, deterministic results,
+JSON round trips, changed-data detection, malformed model parameters, and skipped
+training. This fixture is software-test data, not evidence of real model quality:
+
+```bash
+pytest -q tests/test_modeling.py tests/test_dag.py
+```
+
 ## Testing instructions
 
 In the native development environment:
@@ -251,7 +301,7 @@ Or use the built container, without a running Airflow server:
 docker compose run --rm --no-deps -v "$PWD/tests:/opt/project/tests:ro" airflow bash -c 'pip install pytest==8.4.2 ruff==0.14.3 && ruff check src dags app tests && pytest -q'
 ```
 
-Tests use small fixtures, mocked requests, temporary filesystem directories, Airflow 3 `DagBag` import parsing, and Streamlit `AppTest`. They require installed dependencies but no server, credentials, Docker daemon, or network during test execution. Docker is only an optional test runner. Package installation itself needs internet or a prepared package cache.
+Tests use small fixtures (including synthetic ML training examples), mocked requests, temporary filesystem directories, Airflow 3 `DagBag` import parsing, and Streamlit `AppTest`. They require installed dependencies but no server, credentials, Docker daemon, or network during test execution. Docker is only an optional test runner. Package installation itself needs internet or a prepared package cache.
 
 ## GitHub Actions CI explanation
 
@@ -268,38 +318,6 @@ A single workflow, `.github/workflows/ci.yml`, runs on pushes to `main`, all pul
 Pip and Docker layer caches speed up repeat runs. New commits cancel outdated checks for the same branch/PR. Jobs have timeouts and read-only repository permissions. Pytest XML reports are retained as downloadable artifacts for seven days, including when tests fail. Actions use explicit release tags. No NASA API key or `.env` is needed in CI. Ordinary branch/PR runs do not publish anything; version-tag pushes publish GitHub releases after all checks pass. Docker images are never published.
 
 For branch protection, select **CI result** as the required status check; remove references to the old workflow job names if previously configured.
-
-### Building packages and publishing a release
-
-Every CI run saves a `python-package` artifact containing a wheel (`.whl`) and
-source distribution (`.tar.gz`), retained for 14 days. The wheel installs the
-`asteroid_monitor` Python library and its declared dependencies. Use the GitHub
-repository source archive for the full Docker/DAG/dashboard lab.
-
-To build locally using Python 3.11:
-
-```bash
-python -m pip install build==1.3.0 twine==6.2.0
-python -m build
-python -m twine check --strict dist/*
-```
-
-To publish a GitHub release, first update `version` in `pyproject.toml`, commit the
-change, and push your tested commit. Then push a matching tag (current version:
-`1.0.0`):
-
-```bash
-git tag -a v1.0.0 -m "Release v1.0.0"
-git push origin v1.0.0
-```
-
-The tag push runs the full CI pipeline. The package job rejects tags that do not
-exactly match `v<project version>`. Once every check succeeds, the release job uses
-GitHub's built-in token to create a release with generated notes and both package
-files attached. Only that job receives `contents: write`. No PyPI account or token
-is required. Existing release names are not overwritten; rerunning an already
-published release job fails visibly. Manual workflow runs build artifacts but do
-not publish releases.
 
 ## Example output
 
@@ -324,5 +342,6 @@ These two rows yield total 2, hazardous 1, average velocity 15 km/s, average dia
 - [Airflow testing guidance](https://airflow.apache.org/docs/apache-airflow/3.1.8/best-practices.html).
 - [Streamlit testing](https://docs.streamlit.io/develop/api-reference/app-testing).
 - [Plotly Python](https://plotly.com/python/).
+- [scikit-learn: avoiding data leakage](https://scikit-learn.org/stable/common_pitfalls.html).
 
 New implementation files are MIT licensed. The repository's original GPL license is preserved verbatim at [docs/LICENSE.original-GPL-3.0](docs/LICENSE.original-GPL-3.0) as repository history context; no pre-existing application code was present. See [LICENSE](LICENSE).

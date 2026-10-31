@@ -32,3 +32,25 @@ def test_populated_dashboard(feed, monkeypatch, tmp_path):
     assert len(app.dataframe[0].value) == 1
     app.selectbox[0].set_value("Potentially hazardous").run()
     assert len(app.dataframe[0].value) == 0
+
+
+def test_dashboard_model_evaluation(training_frame, monkeypatch, tmp_path):
+    from asteroid_monitor.modeling import evaluate_classifier, train_classifier
+
+    monkeypatch.setenv("ASTEROID_ROOT", str(tmp_path))
+    save_csv(training_frame, tmp_path / "data/processed/test.csv")
+    write_json(tmp_path / "reports/test.json", summarize(training_frame, "2025-01-01"))
+    evaluation = evaluate_classifier(training_frame, train_classifier(training_frame))
+    write_json(tmp_path / "reports/evaluation.json", evaluation)
+    write_json(
+        tmp_path / "reports/latest.json",
+        {
+            "csv_path": "data/processed/test.csv",
+            "report_path": "reports/test.json",
+            "evaluation_path": "reports/evaluation.json",
+        },
+    )
+    app = AppTest.from_file(str(APP)).run(timeout=30)
+    assert not app.exception
+    assert any("60 training asteroids" in item.value for item in app.markdown)
+    assert "balanced accuracy" in app.dataframe[-1].value["Metric"].tolist()

@@ -1,6 +1,7 @@
 from datetime import timedelta
 from pathlib import Path
 
+import pytest
 from airflow.models import DagBag
 
 
@@ -16,6 +17,8 @@ def test_dag_import_and_dependencies():
         "transform_data",
         "save_processed_data",
         "generate_analytics",
+        "train_model",
+        "evaluate_model",
         "validate_outputs",
     ]
     assert set(dag.task_ids) == set(tasks)
@@ -49,7 +52,8 @@ def test_query_date_semantics():
     )
 
 
-def test_task_handoffs_publish_outputs(feed, monkeypatch, tmp_path):
+@pytest.mark.parametrize("fixture_name", ["feed", "training_feed"])
+def test_task_handoffs_publish_outputs(request, fixture_name, monkeypatch, tmp_path):
     from types import SimpleNamespace
 
     import pendulum
@@ -57,6 +61,8 @@ def test_task_handoffs_publish_outputs(feed, monkeypatch, tmp_path):
     import dags.asteroid_monitor_dag as module
     from asteroid_monitor.storage import read_json
 
+    feed = request.getfixturevalue(fixture_name)
+    records = len(feed["near_earth_objects"]["2025-01-01"])
     monkeypatch.setenv("ASTEROID_ROOT", str(tmp_path))
     monkeypatch.setattr(module, "fetch_feed", lambda query_date: feed)
     monkeypatch.setattr(
@@ -75,11 +81,17 @@ def test_task_handoffs_publish_outputs(feed, monkeypatch, tmp_path):
             "transform_data",
             "save_processed_data",
             "generate_analytics",
+            "train_model",
+            "evaluate_model",
             "validate_outputs",
         ]:
             result = dag.get_task(task_id).python_callable(result)
-        assert result == {"records": 2, "query_date": "2025-01-01"}
+        assert result == {"records": records, "query_date": "2025-01-01"}
     manifest = read_json(tmp_path / "reports/latest.json")
     assert not Path(manifest["csv_path"]).is_absolute()
     assert (tmp_path / manifest["csv_path"]).is_file()
     assert len(list((tmp_path / "data/processed").glob("*.csv"))) == 1
+    model = read_json(tmp_path / manifest["model_path"])
+    evaluation = read_json(tmp_path / manifest["evaluation_path"])
+    assert model["status"] == ("skipped" if records == 2 else "trained")
+    assert evaluation["status"] == ("skipped" if records == 2 else "evaluated")

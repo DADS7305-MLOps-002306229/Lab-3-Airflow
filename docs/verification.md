@@ -44,3 +44,23 @@ Persisted `AIRFLOW_UID=1000` in the ignored local `.env` and recreated both serv
 A rollback-only SQLite UPDATE transaction then passed under UID 1000. No database,
 run history, credentials, or output artifacts were deleted. README recovery guidance
 and the environment example now explain keeping the UID stable.
+
+## Machine learning extension
+
+Verified the eight-task DAG and scikit-learn 1.7.2 extension in Python 3.11:
+
+- 44 Pytest tests passed, including deterministic training, held-out evaluation,
+  JSON model round trips, train/test separation, training-only scaling,
+  insufficient-data handling, invalid artifacts, and the dashboard metrics view.
+- All eight task functions ran twice with both a small feed (ML skipped) and an
+  80-object synthetic feed (model trained/evaluated); manifests published correctly.
+- Ruff linting and formatting checks passed.
+- Both Docker images built with scikit-learn 1.7.2; `pip check` passed.
+- The existing CI job runs the new tests automatically; image smoke checks also
+  import scikit-learn. No GitHub workflow execution or release was triggered here.
+
+The synthetic training fixture verifies software behavior, not scientific accuracy.
+No live NASA training performance is claimed. Real daily feeds may have too few
+examples of both classes, in which case JSON artifacts explicitly record that no
+model was trained. The existing upstream Requests warning remains unrelated to
+these ML changes.
